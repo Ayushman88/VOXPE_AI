@@ -1408,27 +1408,5 @@ npm run lint
 
 ---
 
-## License
-
-MIT
-
----
-
-## Contributing
-
-Contributions welcome! Please read the contributing guidelines before submitting PRs.
-
----
-
-## Support
-
-For issues and questions:
-
-- Check existing GitHub issues
-- Review documentation
-- Contact maintainers
-
----
-
 **Built with ❤️ for safe, transparent AI-powered banking**
 # VOXPE_AI
