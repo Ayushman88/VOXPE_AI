@@ -2,6 +2,8 @@
 
 A comprehensive, production-ready voice-controlled banking system where an AI assistant can interact with a banking application through browser automation, while maintaining strict security and safety protocols. The system demonstrates how AI can safely handle financial operations with explicit user consent and complete transparency.
 
+The repository will be populated with all necessary files one day prior to the hackathon to maintain competitive integrity.
+
 ## Table of Contents
 
 - [Overview](#overview)
