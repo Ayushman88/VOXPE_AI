@@ -1,0 +1,19 @@
+@import "tailwindcss";
+
+:root {
+  --primary: #2563eb;
+  --secondary: #1e40af;
+  --success: #10b981;
+  --danger: #ef4444;
+}
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Ensure Tailwind utilities work */
+* {
+  box-sizing: border-box;
+}

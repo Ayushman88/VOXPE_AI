@@ -1,0 +1,40 @@
+// AI Agent Database Schema
+// This database is ONLY accessible by the AI agent app
+// Contains audit logs, user sessions, and AI-specific data
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model AiAuditLog {
+  id                String    @id @default(cuid())
+  userId            String    @map("user_id") // Reference to banking user ID (external reference)
+  rawCommandText    String    @map("raw_command_text")
+  parsedIntentJson  String    @map("parsed_intent_json") // JSON string
+  previewId         String?   @map("preview_id") // Reference to banking payment preview (external)
+  consentToken      String?   @map("consent_token")
+  result            String?   // JSON string with result
+  traceId           String    @unique @map("trace_id")
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  @@map("ai_audit_logs")
+}
+
+model AiUserSession {
+  id                String    @id @default(cuid())
+  bankingUserId     String    @unique @map("banking_user_id") // External reference to banking user
+  sessionToken      String    @unique @map("session_token")
+  preferences       String?   // JSON string with user preferences
+  createdAt         DateTime  @default(now()) @map("created_at")
+  lastActiveAt      DateTime  @default(now()) @map("last_active_at")
+  expiresAt         DateTime  @map("expires_at")
+
+  @@map("ai_user_sessions")
+}
+

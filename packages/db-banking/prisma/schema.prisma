@@ -1,0 +1,172 @@
+// Banking Database Schema
+// This database is ONLY accessible by the banking app
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String   @id @default(cuid())
+  name           String
+  email          String   @unique
+  phone          String   @unique
+  hashedPassword String   @map("hashed_password")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  accounts            Account[]
+  beneficiaries       Beneficiary[]
+  paymentPreviews     PaymentPreview[]
+  transactions        Transaction[]
+  oauthAuthorizations OAuthAuthorization[]
+
+  @@map("users")
+}
+
+model OAuthAuthorization {
+  id                  String   @id @default(cuid())
+  userId              String   @map("user_id")
+  clientId            String   @map("client_id") // e.g., "ai-agent"
+  authorizationCode   String   @unique @map("authorization_code")
+  scopes              String // JSON array: ["payments", "read_balance", "read_transactions"]
+  redirectUri         String   @map("redirect_uri")
+  codeChallenge       String?  @map("code_challenge") // PKCE support
+  codeChallengeMethod String?  @map("code_challenge_method") // "S256" or "plain"
+  expiresAt           DateTime @map("expires_at")
+  used                Boolean  @default(false)
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("oauth_authorizations")
+}
+
+model Account {
+  id            String        @id @default(cuid())
+  userId        String        @map("user_id")
+  type          AccountType
+  accountNumber String        @unique @map("account_number")
+  ifsc          String
+  balance       Decimal       @default(0) @db.Decimal(15, 2)
+  status        AccountStatus @default(ACTIVE)
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  paymentPreviews PaymentPreview[]
+  transactions    Transaction[]
+
+  @@map("accounts")
+}
+
+enum AccountType {
+  SAVINGS
+  CURRENT
+}
+
+enum AccountStatus {
+  ACTIVE
+  INACTIVE
+  FROZEN
+}
+
+model Beneficiary {
+  id                       String   @id @default(cuid())
+  userId                   String   @map("user_id")
+  name                     String
+  upiId                    String?  @map("upi_id")
+  beneficiaryAccountNumber String?  @map("beneficiary_account_number")
+  beneficiaryIfsc          String?  @map("beneficiary_ifsc")
+  addedAt                  DateTime @default(now()) @map("added_at")
+  isActive                 Boolean  @default(true) @map("is_active")
+
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  paymentPreviews PaymentPreview[]
+  transactions    Transaction[]
+
+  @@map("beneficiaries")
+}
+
+model PaymentPreview {
+  id               String               @id @default(cuid())
+  userId           String               @map("user_id")
+  fromAccountId    String               @map("from_account_id")
+  beneficiaryId    String               @map("beneficiary_id")
+  method           PaymentMethod
+  requestedAmount  Decimal              @map("requested_amount") @db.Decimal(15, 2)
+  charges          Decimal              @default(0) @db.Decimal(15, 2)
+  finalDebitAmount Decimal              @map("final_debit_amount") @db.Decimal(15, 2)
+  rulesResult      String               @map("rules_result") // JSON string: {allowed: boolean, reasons: string[]}
+  status           PaymentPreviewStatus @default(PENDING)
+  consentToken     String?              @unique @map("consent_token")
+  expiresAt        DateTime             @map("expires_at")
+  createdAt        DateTime             @default(now()) @map("created_at")
+  updatedAt        DateTime             @updatedAt @map("updated_at")
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fromAccount  Account       @relation(fields: [fromAccountId], references: [id])
+  beneficiary  Beneficiary   @relation(fields: [beneficiaryId], references: [id])
+  transactions Transaction[]
+
+  @@map("payment_previews")
+}
+
+enum PaymentMethod {
+  UPI
+  IMPS
+  NEFT
+  RTGS
+}
+
+enum PaymentPreviewStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  EXPIRED
+}
+
+model Transaction {
+  id               String             @id @default(cuid())
+  userId           String             @map("user_id")
+  fromAccountId    String             @map("from_account_id")
+  beneficiaryId    String             @map("beneficiary_id")
+  paymentPreviewId String?            @map("payment_preview_id")
+  method           PaymentMethod
+  amount           Decimal            @db.Decimal(15, 2)
+  status           TransactionStatus
+  bankReferenceId  String?            @unique @map("bank_reference_id")
+  initiatedBy      InitiatedBy        @map("initiated_by")
+  channel          TransactionChannel
+  createdAt        DateTime           @default(now()) @map("created_at")
+  updatedAt        DateTime           @updatedAt @map("updated_at")
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fromAccount    Account         @relation(fields: [fromAccountId], references: [id])
+  beneficiary    Beneficiary     @relation(fields: [beneficiaryId], references: [id])
+  paymentPreview PaymentPreview? @relation(fields: [paymentPreviewId], references: [id])
+
+  @@map("transactions")
+}
+
+enum TransactionStatus {
+  SUCCESS
+  FAILED
+  REVERSED
+  PENDING
+}
+
+enum InitiatedBy {
+  USER_UI
+  VOICE_AI
+}
+
+enum TransactionChannel {
+  WEB
+  VOICE_AGENT
+}

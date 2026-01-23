@@ -15,6 +15,7 @@ The repository will be populated with all necessary files one day prior to the h
 - [How Browser Automation Works](#how-browser-automation-works)
 - [Security Architecture (SAIF Framework)](#security-architecture-saif-framework)
 - [Payment Flow](#payment-flow)
+- [Bill Payment Flow](#bill-payment-flow)
 - [Voice Command Processing](#voice-command-processing)
 - [Setup & Installation](#setup--installation)
 - [Usage Guide](#usage-guide)
@@ -39,6 +40,7 @@ VoxPe AI is a sophisticated banking assistant that allows users to perform banki
 - 🔐 **OAuth2 Authentication** - Secure token-based authentication between components
 - 📊 **Audit Logging** - Complete traceability of all AI actions
 - ⚡ **Two-Phase Payment Flow** - Preview → Confirm → Execute with explicit consent
+- 💡 **Bill Payments** - Pay electricity bills, mobile recharges, and other Indian utility bills via voice commands
 
 ---
 
@@ -157,6 +159,7 @@ VoxPe AI is a sophisticated banking assistant that allows users to perform banki
   - Authentication state (token, scopes, expiration)
   - Voice recognition state (listening, transcript)
   - Payment preview state
+  - Bill payment preview state
   - Beneficiary creation state
 
 #### Backend API Routes
@@ -177,17 +180,20 @@ This is the core command processing endpoint that handles voice commands.
    - Audit logging (all actions logged with trace ID)
 4. **Command Execution**:
    - **MAKE_PAYMENT**: Creates payment preview, checks beneficiaries
+   - **PAY_BILL**: Creates bill payment preview, validates consumer number
    - **CHECK_BALANCE**: Fetches account balance
    - **SHOW_TRANSACTIONS**: Retrieves recent transactions
-5. **Response**: Returns AI response + preview (if payment)
+5. **Response**: Returns AI response + preview (if payment or bill payment)
 
 **Intent Parsing with Gemini AI**:
 
 ```typescript
 // System prompt instructs AI to extract:
-- intent: "MAKE_PAYMENT" | "CHECK_BALANCE" | "SHOW_TRANSACTIONS" | "UNKNOWN"
+- intent: "MAKE_PAYMENT" | "PAY_BILL" | "CHECK_BALANCE" | "SHOW_TRANSACTIONS" | "UNKNOWN"
 - amount: number (e.g., 500)
-- payee_name: string (e.g., "Rohan")
+- payee_name: string (e.g., "Rohan") // for MAKE_PAYMENT
+- bill_type: "electricity" | "mobile" | "water" | "gas" | "broadband" | etc. // for PAY_BILL
+- consumer_number: string (e.g., "1234567890") // for PAY_BILL
 - payment_method: "UPI" | "IMPS" | "NEFT"
 - currency: "INR"
 - schedule: "NOW"
@@ -228,6 +234,22 @@ Creates a new beneficiary using browser automation.
 3. Worker logs into banking app and adds beneficiary
 4. Returns success/failure status
 
+**4. `/api/ai/pay-bill` (`app/api/ai/pay-bill/route.ts`)**
+
+Handles bill payment confirmation and execution.
+
+**Flow**:
+
+1. **Validation**: Verifies bill preview exists and is valid
+2. **Consent Token**: Generates JWT consent token (15min expiry)
+3. **Preview Confirmation**: Confirms bill preview with banking API
+4. **Browser Automation**:
+   - Calls browser automation worker with PAY_BILL job
+   - Passes OAuth token for authentication
+   - Executes bill payment in visible browser
+5. **Bill Payment Execution**: Finalizes bill payment with banking API
+6. **Audit Logging**: Logs bill payment execution with trace ID
+
 #### Libraries
 
 **`lib/banking-api.ts`**: HTTP client for banking app API
@@ -238,7 +260,7 @@ Creates a new beneficiary using browser automation.
 
 **`lib/browser-automation.ts`**: HTTP client for browser automation worker
 
-- Methods: `createBeneficiary()`, `executePayment()`, `healthCheck()`
+- Methods: `createBeneficiary()`, `executePayment()`, `payBill()`, `healthCheck()`
 - Sends job requests to worker
 - Handles worker communication errors
 
@@ -265,6 +287,7 @@ A fully functional dummy banking application that simulates a real Indian bank's
 - Account management
 - Beneficiary management
 - Payment transfers (UPI, IMPS, NEFT)
+- Bill payments (Electricity, Mobile, Water, Gas, Broadband, etc.)
 - Transaction history
 - OAuth2 authorization server
 
@@ -310,7 +333,16 @@ A fully functional dummy banking application that simulates a real Indian bank's
 - Add beneficiary form
 - Edit/delete functionality
 
-**7. Statements (`app/(protected)/statements/page.tsx`)**
+**7. Bill Payments (`app/(protected)/bills/page.tsx`)**
+
+- Bill payment interface
+- Bill type selection (Electricity, Mobile, Water, Gas, etc.)
+- Consumer number/phone number input
+- Bill amount entry or auto-fetch
+- Payment confirmation
+- Bill payment history
+
+**8. Statements (`app/(protected)/statements/page.tsx`)**
 
 - Transaction history
 - Filtering and pagination
@@ -375,8 +407,33 @@ A fully functional dummy banking application that simulates a real Indian bank's
   - Updates account balance
   - Returns transaction ID and reference
 
+- **`/api/bills/preview`**: Create bill payment preview
+
+  - Validates bill payment request
+  - Validates consumer number/phone number format
+  - Calculates charges (if any)
+  - Creates preview record (15min expiry)
+  - Returns preview with bill details
+
+- **`/api/bills/confirm-preview`**: Confirm bill payment preview
+
+  - Validates consent token
+  - Marks bill preview as confirmed
+
+- **`/api/bills/execute-from-preview`**: Execute bill payment
+
+  - Validates preview and consent token
+  - Creates bill payment transaction record
+  - Updates account balance
+  - Returns transaction ID and reference
+
+- **`/api/bills/history`**: Get bill payment history
+
+  - Returns past bill payments for user
+  - Filterable by bill type
+
 - **`/api/transactions`**: Get transaction history
-  - Returns recent transactions for user
+  - Returns recent transactions for user (includes bill payments)
 
 #### Payment Rules Engine
 
@@ -577,6 +634,73 @@ await beneficiarySelect.selectOption({
 - Falls back to generated ID if not found
 - Returns reference for transaction tracking
 
+**3. PAY_BILL**
+
+**Request**:
+
+```json
+{
+  "type": "PAY_BILL",
+  "billType": "electricity",
+  "amount": 2500,
+  "consumerNumber": "1234567890",
+  "phoneNumber": null,
+  "traceId": "uuid",
+  "oauthToken": "jwt-token"
+}
+```
+
+**Execution Flow**:
+
+1. Create browser context
+2. Authenticate with OAuth token (or email/password)
+3. Navigate to bill payment page
+4. Select bill type from dropdown/buttons:
+   - Electricity
+   - Mobile Recharge
+   - Water
+   - Gas
+   - Broadband
+   - DTH
+   - Fastag
+   - Property Tax
+5. Enter consumer number or phone number:
+   - Consumer number for bills (electricity, water, gas)
+   - Phone number for mobile recharge
+6. Fetch bill details (if supported by provider):
+   - Auto-fetch amount
+   - Display due date
+   - Show bill details
+7. Enter amount (if not auto-fetched)
+8. Select payment account
+9. Submit bill payment form
+10. Wait for success message
+11. Extract reference ID from page
+12. Keep browser open for 10 seconds (user visibility)
+13. Close context
+14. Return reference ID
+
+**Bill Type Selection**:
+
+- Uses Playwright to find bill type selector
+- Matches bill type name (case-insensitive)
+- Handles different UI patterns (dropdowns, buttons, tabs)
+
+**Form Filling**:
+
+- Consumer number: Text input field (for electricity, water, gas bills)
+- Phone number: Text input field (for mobile recharge)
+- Amount: Number input field
+- Account selection: Dropdown (if multiple accounts)
+
+**Error Handling**:
+
+- Invalid consumer number format
+- Bill provider unavailable
+- Amount mismatch
+- Network timeouts
+- Element not found errors
+
 **Authentication with OAuth Token**:
 
 ```typescript
@@ -744,6 +868,147 @@ POST http://localhost:3001/execute
 
 - AI agent displays success message
 - Shows reference ID
+- Updates transaction history
+
+### Step-by-Step: Bill Payment Execution
+
+Let's trace through a complete bill payment execution:
+
+**1. User Voice Command**: "Pay electricity bill for 2500 rupees"
+
+**2. AI Agent Processing**:
+
+- Parses intent: `PAY_BILL`
+- Extracts: billType="electricity", amount=2500
+- Asks for consumer number if not provided
+- Creates bill payment preview via banking API
+- Returns preview to user
+
+**3. User Confirmation**:
+
+- User reviews bill preview
+- Clicks "Confirm Payment"
+
+**4. AI Agent → Browser Worker**:
+
+```typescript
+POST http://localhost:3001/execute
+{
+  "type": "PAY_BILL",
+  "billType": "electricity",
+  "amount": 2500,
+  "consumerNumber": "1234567890",
+  "traceId": "abc-123",
+  "oauthToken": "eyJhbGc..."
+}
+```
+
+**5. Browser Worker Execution**:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Step 1: Initialize Browser Context                      │
+│  - Creates new Playwright browser context                │
+│  - Sets viewport: 1280x720                               │
+│  - Configures cookies and localStorage                    │
+└─────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│  Step 2: Authenticate                                   │
+│  - Sets OAuth token as cookie                            │
+│  - Sets OAuth token in localStorage                      │
+│  - Navigates to http://localhost:3002/bills            │
+│  - Verifies not redirected to login (auth successful)    │
+└─────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│  Step 3: Select Bill Type                               │
+│  - Finds bill type selector (dropdown/buttons)          │
+│  - Matches "Electricity" (case-insensitive)            │
+│  - Selects matching bill type                          │
+└─────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│  Step 4: Enter Consumer Number                          │
+│  - Finds consumer number input field                    │
+│  - Fills with "1234567890"                              │
+│  - Waits for validation                                 │
+└─────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│  Step 5: Fetch Bill Details (if supported)             │
+│  - Clicks "Fetch Bill" button (if available)            │
+│  - Waits for bill details to load                       │
+│  - Extracts amount, due date, etc.                      │
+└─────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│  Step 6: Enter Amount                                   │
+│  - Finds amount input field                             │
+│  - Fills with "2500" (or uses fetched amount)          │
+│  - Waits for form validation                            │
+└─────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│  Step 7: Select Payment Account                        │
+│  - Finds account selection dropdown                     │
+│  - Selects default or specified account                │
+└─────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│  Step 8: Submit Bill Payment                            │
+│  - Finds submit button                                  │
+│  - Clicks submit                                        │
+│  - Waits for payment confirmation                       │
+└─────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│  Step 9: Extract Result                                │
+│  - Waits for success message                            │
+│  - Searches page for reference ID (BNK\d+)             │
+│  - Extracts or generates reference ID                   │
+└─────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│  Step 10: User Visibility                               │
+│  - Keeps browser open for 10 seconds                    │
+│  - Allows user to see completed payment                  │
+│  - Closes browser context                               │
+└─────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│  Step 11: Return Result                                 │
+│  - Returns JSON response:                               │
+│    {                                                     │
+│      success: true,                                     │
+│      bankReferenceId: "BNK1234567890",                  │
+│      status: "SUCCESS"                                  │
+│    }                                                     │
+└─────────────────────────────────────────────────────────┘
+```
+
+**6. AI Agent → Banking API**:
+
+- Receives reference ID from worker
+- Calls `/api/bills/execute-from-preview`
+- Finalizes bill payment transaction in database
+- Updates account balance
+
+**7. User Notification**:
+
+- AI agent displays success message
+- Shows reference ID
+- Displays bill payment receipt
 - Updates transaction history
 
 ### Why Visible Browser?
@@ -991,6 +1256,338 @@ If beneficiary doesn't exist:
 
 ---
 
+## Bill Payment Flow
+
+### Overview
+
+VoxPe AI supports paying various Indian utility bills through voice commands. The system can handle electricity bills, mobile recharges, water bills, gas bills, broadband bills, and more. The bill payment process follows the same secure two-phase flow as regular payments, with browser automation handling the actual bill payment on the banking app.
+
+### Supported Bill Types
+
+**1. Electricity Bills**:
+
+- State electricity boards (BSES, TPDDL, MSEB, UPPCL, etc.)
+- Consumer number-based payments
+- Bill amount from user or fetched from provider
+
+**2. Mobile Recharge**:
+
+- Prepaid mobile recharge (Airtel, Jio, Vi, BSNL)
+- Postpaid bill payment
+- Phone number-based recharge
+
+**3. Water Bills**:
+
+- Municipal water supply bills
+- Consumer/account number-based payments
+
+**4. Gas Bills**:
+
+- LPG cylinder booking
+- Gas connection bill payment
+- Consumer number-based
+
+**5. Broadband/Internet Bills**:
+
+- Internet service provider bills
+- Account number-based payments
+
+**6. Other Bills**:
+
+- DTH Recharge (Direct-to-home TV)
+- Fastag Recharge (Highway toll)
+- Property Tax
+- Insurance Premiums
+
+### Bill Payment Process
+
+```
+User Voice Command
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ 1. Voice Recognition                │
+│    - User says: "Pay electricity    │
+│      bill for 2500 rupees"          │
+│    - Browser captures audio          │
+│    - Converts to text               │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ 2. Intent Parsing                   │
+│    - Gemini AI identifies:          │
+│      intent = "PAY_BILL"            │
+│      bill_type = "electricity"      │
+│      amount = 2500                  │
+│    - Extracts consumer number       │
+│      (if provided)                  │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ 3. Security Checks                   │
+│    - Rate limiting                  │
+│    - Fraud detection                │
+│    - Amount validation              │
+│    - Audit logging                  │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ 4. Bill Details Collection          │
+│    - If consumer number missing:     │
+│      AI asks: "Please provide        │
+│      consumer number"                │
+│    - User provides via voice/text    │
+│    - AI validates format            │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ 5. Bill Preview Creation             │
+│    - Calls banking API               │
+│      /api/bills/preview             │
+│    - Validates bill details          │
+│    - Calculates charges (if any)    │
+│    - Creates preview (15min expiry)  │
+│    - Shows bill details:             │
+│      - Bill type                    │
+│      - Consumer number              │
+│      - Amount                       │
+│      - Due date (if available)     │
+│      - Charges                      │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ 6. Preview Display                  │
+│    - Shows bill summary              │
+│    - Displays amount and charges    │
+│    - Shows consumer details          │
+│    - User reviews information        │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ 7. User Confirmation                │
+│    - User clicks "Confirm Payment"  │
+│    - Generates consent token        │
+│    - Confirms preview with bank     │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ 8. Browser Automation                │
+│    - Worker receives job:            │
+│      type: "PAY_BILL"               │
+│      billType: "electricity"         │
+│      amount: 2500                    │
+│      consumerNumber: "1234567890"   │
+│    - Opens visible browser           │
+│    - Authenticates with OAuth token  │
+│    - Navigates to bill payment page │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ 9. Bill Payment Form Filling        │
+│    - Selects bill type:             │
+│      "Electricity"                   │
+│    - Enters consumer number:        │
+│      "1234567890"                    │
+│    - Fetches bill details           │
+│      (if supported by provider)     │
+│    - Enters amount: 2500            │
+│    - Selects payment account         │
+│    - Submits payment form            │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ 10. Payment Confirmation            │
+│     - Waits for success message     │
+│     - Extracts reference ID         │
+│     - Keeps browser open 10 seconds │
+│     - Returns reference ID          │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ 11. Payment Execution                │
+│     - Banking API finalizes payment  │
+│     - Creates transaction record    │
+│     - Updates account balance        │
+│     - Records bill payment details    │
+└─────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ 12. Success Notification             │
+│     - AI displays success message   │
+│     - Shows reference ID             │
+│     - Displays bill payment receipt  │
+│     - Updates transaction history   │
+└─────────────────────────────────────┘
+```
+
+### Bill Payment Details
+
+**Consumer Number Formats**:
+
+- **Electricity**: Usually 10-12 digits (e.g., "1234567890")
+- **Mobile**: 10-digit phone number (e.g., "9876543210")
+- **Water**: Varies by municipality (8-12 digits)
+- **Gas**: 10-11 digits (e.g., "12345678901")
+
+**Amount Handling**:
+
+- User can specify amount: "Pay 2500 rupees"
+- Or fetch from provider: "Pay electricity bill" (AI fetches due amount)
+- System validates amount against account balance
+
+**Bill Provider Integration**:
+
+- Integration with bill aggregators (BillDesk, PayU, etc.)
+- Real-time bill fetching
+- Due date checking
+- Auto-payment scheduling
+
+### Example Voice Commands
+
+**Electricity Bill**:
+
+```
+User: "Pay electricity bill for 2500 rupees"
+AI: "I'll pay your electricity bill of ₹2500. Please provide your consumer number."
+
+User: "Consumer number is 1234567890"
+AI: "Got it! Consumer number 1234567890. Creating payment preview..."
+
+[Preview shown]
+- Bill Type: Electricity
+- Consumer Number: 1234567890
+- Amount: ₹2500
+- Charges: ₹0
+- Total: ₹2500
+
+User: [Clicks Confirm]
+AI: "Opening browser to pay your electricity bill..."
+[Browser automation executes]
+AI: "✅ Electricity bill paid successfully! Reference ID: BNK1234567890"
+```
+
+**Mobile Recharge**:
+
+```
+User: "Recharge my phone with 299 rupees"
+AI: "I'll recharge your phone with ₹299. Please provide your phone number."
+
+User: "9876543210"
+AI: "Got it! Phone number 9876543210. Creating recharge preview..."
+
+[Preview shown]
+- Bill Type: Mobile Recharge
+- Phone Number: 9876543210
+- Amount: ₹299
+- Charges: ₹0
+- Total: ₹299
+
+User: [Clicks Confirm]
+AI: "Opening browser to recharge your phone..."
+[Browser automation executes]
+AI: "✅ Mobile recharge successful! Reference ID: BNK9876543210"
+```
+
+**Water Bill**:
+
+```
+User: "Pay water bill for 1200"
+AI: "I'll pay your water bill of ₹1200. Please provide your consumer number."
+
+User: "Consumer number 987654321012"
+AI: "Got it! Creating payment preview..."
+
+[Preview shown and confirmed]
+AI: "✅ Water bill paid successfully!"
+```
+
+### Browser Automation for Bills
+
+The browser automation worker handles bill payments similarly to regular payments:
+
+**Job Type**: `PAY_BILL`
+
+**Request Structure**:
+
+```json
+{
+  "type": "PAY_BILL",
+  "billType": "electricity",
+  "amount": 2500,
+  "consumerNumber": "1234567890",
+  "phoneNumber": null,
+  "traceId": "uuid",
+  "oauthToken": "jwt-token"
+}
+```
+
+**Execution Steps**:
+
+1. Authenticate with OAuth token
+2. Navigate to bill payment page
+3. Select bill type from dropdown/buttons
+4. Enter consumer number or phone number
+5. Fetch bill details (if supported)
+6. Enter amount (if not auto-fetched)
+7. Select payment account
+8. Submit payment
+9. Extract reference ID
+10. Return success/failure
+
+**Bill Type Selection**:
+
+- Uses Playwright to find bill type selector
+- Matches bill type name (case-insensitive)
+- Handles different UI patterns (dropdowns, buttons, tabs)
+
+**Form Filling**:
+
+- Consumer number: Text input field
+- Phone number: Text input field (for recharge)
+- Amount: Number input field
+- Account selection: Dropdown (if multiple accounts)
+
+### Security for Bill Payments
+
+**Same Security Measures**:
+
+- Two-phase payment flow (Preview → Confirm)
+- Consent tokens required
+- Rate limiting (10 bill payments per minute)
+- Fraud detection
+- Audit logging with trace IDs
+
+**Bill-Specific Validations**:
+
+- Consumer number format validation
+- Phone number format validation (10 digits)
+- Amount limits (same as regular payments)
+- Bill type validation
+
+### Bill Payment Features
+
+1. **Bill Fetching**: Auto-fetch bill amount from provider
+2. **Due Date Alerts**: Notify user of upcoming bill due dates
+3. **Auto-Payment**: Schedule recurring bill payments
+4. **Bill History**: View past bill payments
+5. **Multiple Bills**: Pay multiple bills in one command
+6. **Bill Reminders**: Voice reminders for due bills
+7. **Provider Integration**: Direct integration with bill providers
+8. **QR Code Scanning**: Scan bill QR codes for quick payment
+
+---
+
 ## Voice Command Processing
 
 ### Supported Commands
@@ -1021,6 +1618,34 @@ If beneficiary doesn't exist:
 - "Show transactions"
 - "Transaction history"
 - "Recent payments"
+
+**4. Bill Payment Commands**:
+
+- "Pay electricity bill for 2500 rupees"
+- "Pay mobile recharge of 500 rupees"
+- "Pay water bill for 1200"
+- "Pay gas bill ₹800"
+- "Recharge my phone with 299 rupees"
+- "Pay electricity bill for consumer number 1234567890"
+- "Pay broadband bill for 1500"
+
+**Bill Types Supported**:
+
+- ⚡ **Electricity Bills** - State electricity boards (BSES, TPDDL, MSEB, etc.)
+- 📱 **Mobile Recharge** - Prepaid and postpaid (Airtel, Jio, Vi, BSNL)
+- 💧 **Water Bills** - Municipal water supply bills
+- 🔥 **Gas Bills** - LPG cylinder bookings and gas bills
+- 📶 **Broadband/Internet** - Internet service provider bills
+- 📺 **DTH Recharge** - Direct-to-home TV recharge
+- 🚗 **Fastag Recharge** - Highway toll payment
+- 🏠 **Property Tax** - Municipal property tax payments
+
+**Variations Handled**:
+
+- Bill type detection: "electricity", "mobile", "recharge", "water", "gas", "broadband"
+- Amount extraction: "2500", "Rs 2500", "₹2500", "2500 rupees"
+- Consumer number extraction: "consumer number 1234567890", "account 9876543210"
+- Phone number extraction: "for 9876543210", "mobile 9876543210"
 
 ### Intent Parsing Details
 
@@ -1148,14 +1773,14 @@ npm run dev:bank
 **Terminal 2 - AI Agent App**:
 
 ```bash
-npm run dev:ai
+   npm run dev:ai
 # Runs on http://localhost:3000
 ```
 
 **Terminal 3 - Browser Automation Worker**:
 
 ```bash
-npm run dev:worker
+   npm run dev:worker
 # Runs on http://localhost:3001
 ```
 
@@ -1182,7 +1807,8 @@ npm run dev:worker
 
 4. **Test Voice Commands**:
    - Click microphone button
-   - Say: "Pay 500 rupees to Rohan via UPI"
+   - Try payment: "Pay 500 rupees to Rohan via UPI"
+   - Try bill payment: "Pay electricity bill for 2500 rupees"
    - Review preview and confirm
 
 ---
@@ -1219,6 +1845,34 @@ npm run dev:worker
 1. Click microphone
 2. Say: "Show my last 5 payments"
 3. AI lists recent transactions
+
+**Paying Bills**:
+
+1. Click microphone
+2. Say: "Pay electricity bill for 2500 rupees"
+3. AI asks for consumer number (if not provided)
+4. Provide consumer number via voice or text
+5. Review bill payment preview:
+   - Bill type (electricity, mobile, water, etc.)
+   - Consumer number/phone number
+   - Amount
+   - Charges (if any)
+6. Click "Confirm Payment"
+7. Watch browser automation:
+   - Navigates to bill payment page
+   - Selects bill type
+   - Enters consumer number
+   - Enters amount
+   - Submits payment
+8. See success message with reference ID
+
+**Example Bill Payment Commands**:
+
+- "Pay electricity bill for 2500 rupees"
+- "Recharge my phone with 299 rupees"
+- "Pay water bill for 1200"
+- "Pay gas bill ₹800"
+- "Pay electricity bill for consumer number 1234567890"
 
 ### Adding Beneficiaries via Voice
 
@@ -1325,8 +1979,10 @@ voxpe/
 - `User`: User accounts
 - `Account`: Bank accounts
 - `Beneficiary`: Payment beneficiaries
-- `Transaction`: Payment transactions
+- `Transaction`: Payment transactions (includes bill payments)
 - `PaymentPreview`: Payment previews (temporary)
+- `BillPayment`: Bill payment records
+- `BillPreview`: Bill payment previews (temporary)
 
 **AI Database** (`packages/db-ai/prisma/schema.prisma`):
 
@@ -1411,4 +2067,5 @@ npm run lint
 ---
 
 **Built with ❤️ for safe, transparent AI-powered banking**
+
 # VOXPE_AI

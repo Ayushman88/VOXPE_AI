@@ -1,0 +1,27 @@
+{
+  "name": "voxpe",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "npm@10.0.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "workers/*"
+  ],
+  "overrides": {
+    "@prisma/client": "^5.22.0"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "dev:ai": "cd apps/ai-agent && npm run dev",
+    "dev:bank": "cd apps/banking && npm run dev",
+    "dev:worker": "cd workers/browser-automation && npm run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "install:all": "npm install && cd packages/db && npm install && cd ../../apps/banking && npm install && cd ../ai-agent && npm install && cd ../../workers/browser-automation && npm install"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0",
+    "typescript": "^5"
+  }
+}
