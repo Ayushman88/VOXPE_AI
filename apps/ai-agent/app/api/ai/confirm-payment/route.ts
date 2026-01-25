@@ -167,21 +167,20 @@ export async function POST(request: NextRequest) {
         throw new Error(browserResult.error || "Browser automation failed");
       }
 
-      const executeData = await bankingAPI.executePaymentFromPreview({
-        previewId,
-        consentToken,
-        bankReferenceId: browserResult.bankReferenceId,
-        status: browserResult.status || "SUCCESS",
-      });
-
+      // If browser automation succeeded, the payment was already triggered in the banking app
+      // because the browser automation fills and submits the form.
+      // We don't need to call executePaymentFromPreview again via API here,
+      // as that would be redundant (though now idempotent due to the banking app fix).
+      
+      // However, we still want to log the final result in our audit logs
       if (auditLog) {
         await db.aiAuditLog.update({
           where: { id: auditLog.id },
           data: {
             result: JSON.stringify({
               success: true,
-              transactionId: executeData.transactionId,
-              bankReferenceId: executeData.bankReferenceId,
+              bankReferenceId: browserResult.bankReferenceId,
+              method: "BROWSER_AUTOMATION",
             }),
           },
         });
@@ -190,15 +189,14 @@ export async function POST(request: NextRequest) {
       await logAIAction(
         userId,
         "PAYMENT_EXECUTED",
-        `Payment executed for preview ${previewId}`,
-        { success: true, ...executeData },
+        `Payment executed for preview ${previewId} via browser automation`,
+        { success: true, bankReferenceId: browserResult.bankReferenceId },
         { traceId }
       );
 
       return NextResponse.json({
         success: true,
-        bankReferenceId: executeData.bankReferenceId,
-        transactionId: executeData.transactionId,
+        bankReferenceId: browserResult.bankReferenceId,
         traceId,
       });
     } catch (browserError: any) {
@@ -206,8 +204,7 @@ export async function POST(request: NextRequest) {
       console.log("🔄 [Confirm Payment] Falling back to direct API execution...");
 
       try {
-        console.log(`🔐 [Confirm Payment] Executing payment via API with previewId: ${previewId}`);
-        console.log(`🔐 [Confirm Payment] Consent token: ${consentToken ? consentToken.substring(0, 20) + "..." : "missing"}`);
+        console.log(`🔐 [Confirm Payment] Executing payment via API fallback with previewId: ${previewId}`);
         
         const executeData = await bankingAPI.executePaymentFromPreview({
           previewId,
@@ -217,6 +214,20 @@ export async function POST(request: NextRequest) {
         });
         
         console.log(`✅ [Confirm Payment] Payment executed successfully via API fallback`);
+
+        if (auditLog) {
+          await db.aiAuditLog.update({
+            where: { id: auditLog.id },
+            data: {
+              result: JSON.stringify({
+                success: true,
+                transactionId: executeData.transactionId,
+                bankReferenceId: executeData.bankReferenceId,
+                method: "API_FALLBACK",
+              }),
+            },
+          });
+        }
 
         await logAIAction(
           userId,

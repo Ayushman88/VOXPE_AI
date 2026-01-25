@@ -216,13 +216,28 @@ function parseIntentFallback(command: string): ParsedIntent {
   };
 }
 
+// Helper to calculate cosine similarity
+function calculateCosineSimilarity(vec1: number[], vec2: number[]): number {
+  if (vec1.length !== vec2.length) return 0;
+  let dotProduct = 0;
+  let norm1 = 0;
+  let norm2 = 0;
+  for (let i = 0; i < vec1.length; i++) {
+    dotProduct += vec1[i] * vec2[i];
+    norm1 += vec1[i] * vec1[i];
+    norm2 += vec2[i] * vec2[i];
+  }
+  if (norm1 === 0 || norm2 === 0) return 0;
+  return dotProduct / (Math.sqrt(norm1) * Math.sqrt(norm2));
+}
+
 export async function POST(request: NextRequest) {
   const traceId = uuidv4();
   let userId: string | null = null;
   let effectiveUserId: string | null = null;
 
   try {
-    const { command } = await request.json();
+    const { command, voiceEmbedding } = await request.json();
 
     if (!command) {
       return NextResponse.json(
@@ -260,6 +275,52 @@ export async function POST(request: NextRequest) {
     }
     
     console.log("👤 [Process Command] Using effectiveUserId:", effectiveUserId);
+
+    // VOICE BIOMETRIC VERIFICATION
+    const voiceProfile = await db.voiceProfile.findUnique({
+      where: { bankingUserId: effectiveUserId },
+    });
+
+    let isVoiceMatched = false;
+    let voiceExpired = false;
+
+    if (voiceProfile) {
+      // Check for 90-day expiry
+      const ENROLLMENT_EXPIRY_DAYS = 90;
+      const lastUpdated = new Date(voiceProfile.updatedAt);
+      const expiryDate = new Date(lastUpdated);
+      expiryDate.setDate(expiryDate.getDate() + ENROLLMENT_EXPIRY_DAYS);
+      
+      if (new Date() > expiryDate) {
+        console.log("⚠️ [Voice Biometrics] Profile expired");
+        voiceExpired = true;
+      } else if (!voiceEmbedding || !Array.isArray(voiceEmbedding)) {
+        console.log("⚠️ [Voice Biometrics] Profile exists but no embedding provided in request");
+      } else {
+        const storedEmbedding = voiceProfile.embedding as number[];
+        const similarity = calculateCosineSimilarity(voiceEmbedding, storedEmbedding);
+        const threshold = 0.85;
+        
+        console.log(`🎤 [Voice Biometrics] Similarity: ${similarity.toFixed(4)} (Threshold: ${threshold})`);
+        
+        if (similarity < threshold) {
+          console.log("❌ [Voice Biometrics] Verification failed!");
+          await logAIAction(effectiveUserId, "VOICE_VERIFICATION_FAILED", command, {
+            error: "Voice signature did not match",
+            similarity,
+            threshold
+          }, {}, traceId);
+
+          return NextResponse.json({
+            response: "Sorry, I don't recognize your voice. For security reasons, I can only process commands from the authorized user.",
+            voiceVerificationFailed: true,
+            similarity
+          });
+        }
+        console.log("✅ [Voice Biometrics] Verification successful");
+        isVoiceMatched = true;
+      }
+    }
 
     const parsedIntent = await parseIntent(command);
     console.log("✅ Parsed intent:", JSON.stringify(parsedIntent, null, 2));
@@ -418,7 +479,9 @@ export async function POST(request: NextRequest) {
       const explanation = explainAIDecision(parsedIntent.intent, parsedIntent, previewData.rulesResult);
 
       return NextResponse.json({
-        response: explanation + `You're about to pay ₹${previewData.requestedAmount} to ${beneficiary.name} via ${parsedIntent.payment_method || "UPI"}. ${previewData.charges > 0 ? `Charges: ₹${previewData.charges}. ` : ""}Total: ₹${previewData.finalDebitAmount}. Please confirm to proceed.`,
+        response: explanation + (voiceExpired ? "\n⚠️ Your voice signature has expired. Please re-enroll in Settings. " : "") + `You're about to pay ₹${previewData.requestedAmount} to ${beneficiary.name} via ${parsedIntent.payment_method || "UPI"}. ${previewData.charges > 0 ? `Charges: ₹${previewData.charges}. ` : ""}Total: ₹${previewData.finalDebitAmount}. Please confirm to proceed.`,
+        voiceMatched: isVoiceMatched,
+        voiceExpired,
         preview: {
           previewId: previewData.previewId,
           requestedAmount: previewData.requestedAmount,
