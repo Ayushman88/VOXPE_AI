@@ -46,7 +46,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Verify preview and consent token
+    // 1. Check if transaction already exists for this preview (Idempotency check)
+    const existingTransaction = await db.transaction.findFirst({
+      where: { paymentPreviewId: previewId },
+    });
+
+    if (existingTransaction) {
+      console.log(`ℹ️ [Execute Payment] Preview ${previewId} already processed. Returning existing transaction.`);
+      return NextResponse.json({
+        success: true,
+        transactionId: existingTransaction.id,
+        bankReferenceId: existingTransaction.bankReferenceId,
+        message: "Transaction already processed",
+      });
+    }
+
+    // 2. Verify preview and consent token
     const preview = await db.paymentPreview.findFirst({
       where: {
         id: previewId,
@@ -85,34 +100,46 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Update account balance
-    await db.account.update({
-      where: { id: account.id },
-      data: {
-        balance: accountBalance - finalDebitAmount,
-      },
-    });
+    // 3. Execute payment in a single database transaction
+    const result = await db.$transaction(async (tx) => {
+      // Deduct balance
+      const updatedAccount = await tx.account.update({
+        where: { id: account.id },
+        data: {
+          balance: {
+            decrement: finalDebitAmount,
+          },
+        },
+      });
 
-    // Create transaction
-    const transaction = await db.transaction.create({
-      data: {
-        userId,
-        fromAccountId: account.id,
-        beneficiaryId: preview.beneficiaryId,
-        paymentPreviewId: preview.id,
-        method: preview.method,
-        amount: preview.requestedAmount,
-        status: status === "SUCCESS" ? "SUCCESS" : "FAILED",
-        bankReferenceId: bankReferenceId || `BNK${Date.now()}${Math.floor(Math.random() * 10000)}`,
-        initiatedBy: "VOICE_AI",
-        channel: "VOICE_AGENT",
-      },
+      // Double-check balance after decrement (Prisma doesn't natively support check constraints well)
+      if (parseFloat(updatedAccount.balance.toString()) < 0) {
+        throw new Error("Insufficient balance after transaction");
+      }
+
+      // Create transaction record
+      const transaction = await tx.transaction.create({
+        data: {
+          userId,
+          fromAccountId: account.id,
+          beneficiaryId: preview.beneficiaryId,
+          paymentPreviewId: preview.id,
+          method: preview.method,
+          amount: preview.requestedAmount,
+          status: status === "SUCCESS" ? "SUCCESS" : "FAILED",
+          bankReferenceId: bankReferenceId || `BNK${Date.now()}${Math.floor(Math.random() * 10000)}`,
+          initiatedBy: "VOICE_AI",
+          channel: "VOICE_AGENT",
+        },
+      });
+
+      return transaction;
     });
 
     return NextResponse.json({
       success: true,
-      transactionId: transaction.id,
-      bankReferenceId: transaction.bankReferenceId,
+      transactionId: result.id,
+      bankReferenceId: result.bankReferenceId,
     });
   } catch (error) {
     console.error("Error executing payment from preview:", error);

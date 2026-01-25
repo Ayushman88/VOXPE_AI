@@ -75,10 +75,18 @@ export async function POST(request: NextRequest) {
     console.log("🔐 [Login API] Cookie set with sameSite:", sameSite);
 
     return response;
-  } catch (error) {
-    console.error("Login error:", error);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    const stack = error instanceof Error ? error.stack : undefined;
+    console.error("Login error:", message, stack || "");
+
+    // In development, surface the real error to help debug (e.g. DB connection, missing tables)
+    const isDev = process.env.NODE_ENV !== "production";
     return NextResponse.json(
-      { error: "Internal server error" },
+      {
+        error: isDev ? message : "Internal server error",
+        ...(isDev && { details: stack }),
+      },
       { status: 500 }
     );
   }
