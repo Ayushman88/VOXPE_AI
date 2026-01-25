@@ -13,28 +13,50 @@ datasource db {
 }
 
 model AiAuditLog {
-  id                String    @id @default(cuid())
-  userId            String    @map("user_id") // Reference to banking user ID (external reference)
-  rawCommandText    String    @map("raw_command_text")
-  parsedIntentJson  String    @map("parsed_intent_json") // JSON string
-  previewId         String?   @map("preview_id") // Reference to banking payment preview (external)
-  consentToken      String?   @map("consent_token")
-  result            String?   // JSON string with result
-  traceId           String    @unique @map("trace_id")
-  createdAt         DateTime  @default(now()) @map("created_at")
+  id               String   @id @default(cuid())
+  userId           String   @map("user_id") // Reference to banking user ID (external reference)
+  rawCommandText   String   @map("raw_command_text")
+  parsedIntentJson String   @map("parsed_intent_json") // JSON string
+  previewId        String?  @map("preview_id") // Reference to banking payment preview (external)
+  consentToken     String?  @map("consent_token")
+  result           String? // JSON string with result
+  traceId          String   @unique @map("trace_id")
+  createdAt        DateTime @default(now()) @map("created_at")
 
   @@map("ai_audit_logs")
 }
 
 model AiUserSession {
-  id                String    @id @default(cuid())
-  bankingUserId     String    @unique @map("banking_user_id") // External reference to banking user
-  sessionToken      String    @unique @map("session_token")
-  preferences       String?   // JSON string with user preferences
-  createdAt         DateTime  @default(now()) @map("created_at")
-  lastActiveAt      DateTime  @default(now()) @map("last_active_at")
-  expiresAt         DateTime  @map("expires_at")
+  id            String   @id @default(cuid())
+  bankingUserId String   @unique @map("banking_user_id") // External reference to banking user
+  sessionToken  String   @unique @map("session_token")
+  preferences   String? // JSON string with user preferences
+  createdAt     DateTime @default(now()) @map("created_at")
+  lastActiveAt  DateTime @default(now()) @map("last_active_at")
+  expiresAt     DateTime @map("expires_at")
 
   @@map("ai_user_sessions")
 }
 
+model UserPin {
+  id            String   @id @default(cuid())
+  bankingUserId String   @map("banking_user_id") // External reference to banking user
+  accountId     String   @map("account_id") // External reference to banking account
+  hashedPin     String   @map("hashed_pin") // bcrypt hashed PIN
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@unique([bankingUserId, accountId])
+  @@map("user_pins")
+}
+
+model VoiceProfile {
+  id            String   @id @default(cuid())
+  bankingUserId String   @unique @map("banking_user_id") // External reference to banking user
+  embedding     Json     @map("embedding") // Stored voice embedding vector
+  sampleCount   Int      @default(0) @map("sample_count")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@map("voice_profiles")
+}
