@@ -2,8 +2,6 @@
 
 A comprehensive, production-ready voice-controlled banking system where an AI assistant can interact with a banking application through browser automation, while maintaining strict security and safety protocols. The system demonstrates how AI can safely handle financial operations with explicit user consent and complete transparency.
 
-The repository will be populated with all necessary files one day prior to the hackathon to maintain competitive integrity.
-
 ## Table of Contents
 
 - [Overview](#overview)
@@ -34,12 +32,15 @@ VoxPe AI is a sophisticated banking assistant that allows users to perform banki
 ### Key Features
 
 - 🎤 **Voice-First Interface** - Natural language voice commands for banking operations
+- 🛡️ **Voice Biometrics** - Secure enrollment and verification using unique vocal signatures
+- 🧬 **Liveness Detection** - Advanced spectral analysis to prevent replay attacks
+- 🔐 **PIN Security** - Multi-layer protection with account-linked PINs and secure fallback
 - 🤖 **AI-Powered** - Uses Google Gemini AI for intent parsing and command understanding
 - 🌐 **Browser Automation** - Automates banking operations through a visible browser window
 - 🔒 **Security-First** - Implements SAIF (Safe, Accountable, Interpretable, Fair) framework
-- 🔐 **OAuth2 Authentication** - Secure token-based authentication between components
 - 📊 **Audit Logging** - Complete traceability of all AI actions
 - ⚡ **Two-Phase Payment Flow** - Preview → Confirm → Execute with explicit consent
+- ⚙️ **Integrated Settings** - Manage bank accounts, view transactions, and update security preferences
 - 💡 **Bill Payments** - Pay electricity bills, mobile recharges, and other Indian utility bills via voice commands
 
 ---
@@ -161,6 +162,32 @@ VoxPe AI is a sophisticated banking assistant that allows users to perform banki
   - Payment preview state
   - Bill payment preview state
   - Beneficiary creation state
+  - **Voice Biometric State** (Enrollment step, liveness score, identity confidence)
+  - **Account Settings State** (Transaction history, balance visibility toggle)
+
+#### Security & Biometrics Deep Dive
+
+**1. Voice Biometric Enrollment**
+- Users read a mandatory security sentence: *"I authorize VoxPe to process my voice commands for secure banking."*
+- System captures 2 seconds of audio data.
+- Generates a **128-dimension vocal embedding** using frequency-domain analysis.
+- Stores the encrypted embedding in the AI Database.
+
+**2. Liveness Detection (Anti-Replay)**
+- Uses **Spectral Flatness** analysis (Geometric Mean / Arithmetic Mean of the power spectrum).
+- Detects if the audio is a recording (flat spectrum) or a live human voice (dynamic spectrum).
+- Rejection threshold: `< 0.01` (configurable).
+
+**3. Identity Verification**
+- Uses **Cosine Similarity** to compare live commands against the stored profile.
+- Confidence Threshold: `0.85`.
+- **Frictionless Flow**: If voice matches, the 4-digit PIN is automatically skipped for the current transaction.
+- **Secure Fallback**: If voice doesn't match or the command is typed, the system requires the 4-digit security PIN.
+
+**4. Account-Linked PINs**
+- Every bank account is protected by a unique 4-digit PIN.
+- PINs are hashed using `bcrypt` and stored in the AI Database.
+- Users can change PINs via Settings by verifying their old PIN or bank password.
 
 #### Backend API Routes
 
