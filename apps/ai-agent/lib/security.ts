@@ -111,8 +111,19 @@ export async function logAIAction(
 ): Promise<string> {
   const traceId = providedTraceId || `TRACE_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   
-  await db.aiAuditLog.create({
-    data: {
+  await db.aiAuditLog.upsert({
+    where: { traceId },
+    update: {
+      userId,
+      rawCommandText: input,
+      parsedIntentJson: JSON.stringify({
+        action,
+        ...metadata,
+        timestamp: new Date().toISOString(),
+      }),
+      result: JSON.stringify(output),
+    },
+    create: {
       userId,
       rawCommandText: input,
       parsedIntentJson: JSON.stringify({

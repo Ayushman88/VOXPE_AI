@@ -178,6 +178,36 @@ class BankingAPIClient {
       body: JSON.stringify(data),
     });
   }
+
+  async createBillPreview(data: {
+    fromAccountId: string;
+    billType: string;
+    billerName: string;
+    consumerNumber: string;
+    amount: number;
+  }): Promise<PaymentPreview> {
+    return this.request<PaymentPreview>("/api/bills/preview", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async executeBillFromPreview(data: {
+    previewId: string;
+    consentToken: string;
+  }): Promise<{ transactionId: string; bankReferenceId: string }> {
+    return this.request("/api/bills/execute-from-preview", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getBillHistory(billType?: string): Promise<any[]> {
+    const endpoint = billType ? `/api/bills/history?billType=${billType}` : "/api/bills/history";
+    return this.request<any[]>(endpoint, {
+      method: "GET",
+    });
+  }
 }
 
 export const bankingAPI = new BankingAPIClient();

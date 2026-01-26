@@ -47,6 +47,11 @@ interface PaymentPreview {
   beneficiaryName: string;
   method: string;
   accountNumber: string;
+  isBill?: boolean;
+  billType?: string;
+  billerName?: string;
+  consumerNumber?: string;
+  isAlreadySaved?: boolean;
 }
 
 interface BeneficiaryDetailsRequest {
@@ -68,6 +73,15 @@ export default function Home() {
   const [error, setError] = useState("");
   const [needsBeneficiaryDetails, setNeedsBeneficiaryDetails] =
     useState<BeneficiaryDetailsRequest | null>(null);
+  const [needsBillDetails, setNeedsBillDetails] = useState<{
+    billType: string;
+    missingFields: string[];
+  } | null>(null);
+  const [billInputData, setBillInputData] = useState({
+    consumerNumber: "",
+    amount: "",
+    billerName: "",
+  });
   const [beneficiaryFormData, setBeneficiaryFormData] = useState({
     upiId: "",
     accountNumber: "",
@@ -129,6 +143,7 @@ export default function Home() {
   >(null);
   const [voiceStatusMessage, setVoiceStatusMessage] = useState("");
   const [isVerifyingVoice, setIsVerifyingVoice] = useState(false);
+  const [isSavingBiller, setIsSavingBiller] = useState(false);
 
   // Check for existing OAuth token on mount
   useEffect(() => {
@@ -668,6 +683,7 @@ export default function Home() {
     finalTranscriptRef.current = "";
     setIsListening(true);
     setCurrentVoiceEmbedding(null); // Reset for new capture
+    setNeedsBillDetails(null);
 
     if (hasVoiceProfile) {
       const capturePromise = captureVoiceEmbedding();
@@ -723,7 +739,13 @@ export default function Home() {
         body: JSON.stringify({ command, voiceEmbedding: embeddingToUse }),
       });
 
-      const data = await res.json();
+      let data;
+      try {
+        data = await res.json();
+      } catch (e) {
+        console.error("Failed to parse JSON response:", e);
+        throw new Error("Server communication error. Please try again.");
+      }
       if (data.voiceVerificationFailed) {
         setAiResponse(data.response);
         setError("Voice signature mismatch detected.");
@@ -757,6 +779,24 @@ export default function Home() {
           paymentMethod: data.paymentMethod,
         });
         pendingPaymentCommandRef.current = command;
+      }
+
+      if (data.needsMoreInfo && data.intent === "PAY_BILL") {
+        setNeedsBillDetails({
+          billType: data.billType,
+          missingFields: data.missingFields,
+        });
+        // If some info was already extracted, update the input data
+        if (data.extractedInfo) {
+          setBillInputData(prev => ({
+            ...prev,
+            consumerNumber: data.extractedInfo.consumerNumber || prev.consumerNumber,
+            amount: data.extractedInfo.amount ? data.extractedInfo.amount.toString() : prev.amount,
+            billerName: data.extractedInfo.billerName || prev.billerName,
+          }));
+        }
+      } else {
+        setNeedsBillDetails(null);
       }
     } catch (err: any) {
       setError(err.message);
@@ -826,6 +866,33 @@ export default function Home() {
     setAiResponse(
       `I heard: "${input}". Please provide UPI ID or account number.`,
     );
+  };
+
+  const handleSaveBiller = async () => {
+    if (!preview || !preview.isBill || !authToken) return;
+    setIsSavingBiller(true);
+    try {
+      const res = await fetch("/api/ai/save-biller", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          billType: preview.billType,
+          billerName: preview.billerName,
+          consumerNumber: preview.consumerNumber,
+        }),
+      });
+      if (res.ok) {
+        setPreview({ ...preview, isAlreadySaved: true });
+        setAiResponse("✅ Biller saved successfully for future recharges!");
+      }
+    } catch (err) {
+      console.error("Error saving biller:", err);
+    } finally {
+      setIsSavingBiller(false);
+    }
   };
 
   return (
@@ -1020,6 +1087,115 @@ export default function Home() {
                 <p className="text-blue-900 whitespace-pre-wrap">
                   {aiResponse}
                 </p>
+                {needsBillDetails && (
+                  <div className="mt-4 pt-4 border-t border-blue-100">
+                    <p className="text-xs font-bold text-blue-600 uppercase mb-3">Complete Your Request</p>
+                    
+                    <div className="space-y-3 mb-4">
+                      {/* Show Phone Number field only if missing OR if already provided but needs confirmation */}
+                      {needsBillDetails.missingFields.some(f => f.includes("phone/consumer")) && (
+                        <div className="flex flex-col">
+                          <label className="text-[10px] font-bold text-gray-400 uppercase ml-1 mb-1">Phone Number</label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm font-bold">+91</span>
+                            <input 
+                              type="text"
+                              maxLength={10}
+                              value={billInputData.consumerNumber}
+                              onChange={(e) => setBillInputData({...billInputData, consumerNumber: e.target.value.replace(/\D/g, "")})}
+                              className="w-full pl-11 pr-3 py-2 bg-white border border-blue-100 rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-200 outline-none"
+                              placeholder="98XXXXXXXX"
+                            />
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Show Biller selection if missing */}
+                      {needsBillDetails.missingFields.some(f => f.includes("biller name")) && (
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-400 uppercase ml-1 mb-1">Choose Operator</label>
+                          <div className="grid grid-cols-2 gap-2">
+                            {["Airtel", "Jio", "Vi", "BSNL"].map(biller => (
+                              <button 
+                                key={biller}
+                                onClick={() => setBillInputData({...billInputData, billerName: biller})}
+                                className={`px-3 py-2 rounded-lg text-xs font-bold transition-all border ${
+                                  billInputData.billerName === biller 
+                                    ? "bg-blue-600 border-blue-600 text-white" 
+                                    : "bg-white border-gray-200 text-gray-600 hover:border-blue-300"
+                                }`}
+                              >
+                                {biller}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Show Amount field if missing */}
+                      {needsBillDetails.missingFields.some(f => f.includes("amount")) && (
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-400 uppercase ml-1 mb-1">Choose Plan / Amount (₹)</label>
+                          <div className="grid grid-cols-2 gap-2 mb-3">
+                            {[
+                              { amt: 199, label: "1GB/Day (28 Days)" },
+                              { amt: 299, label: "1.5GB/Day (28 Days)" },
+                              { amt: 499, label: "2GB/Day (56 Days)" },
+                              { amt: 666, label: "1.5GB/Day (84 Days)" },
+                              { amt: 719, label: "2GB/Day (84 Days)" },
+                              { amt: 999, label: "3GB/Day (84 Days)" },
+                            ].map(plan => (
+                              <button 
+                                key={plan.amt}
+                                onClick={() => setBillInputData({...billInputData, amount: plan.amt.toString()})}
+                                className={`p-3 rounded-xl border text-left transition-all ${
+                                  billInputData.amount === plan.amt.toString()
+                                    ? "bg-purple-50 border-purple-400 ring-2 ring-purple-100"
+                                    : "bg-white border-gray-100 hover:border-purple-200"
+                                }`}
+                              >
+                                <p className="text-sm font-bold text-gray-900">₹{plan.amt}</p>
+                                <p className="text-[10px] text-gray-500 line-clamp-1">{plan.label}</p>
+                              </button>
+                            ))}
+                          </div>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm font-bold">₹</span>
+                            <input 
+                              type="text"
+                              value={billInputData.amount}
+                              onChange={(e) => setBillInputData({...billInputData, amount: e.target.value.replace(/\D/g, "")})}
+                              className="w-full pl-8 pr-3 py-2 bg-white border border-blue-100 rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-200 outline-none"
+                              placeholder="Or enter custom amount"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      <button 
+                        onClick={() => {
+                          let newCommand = transcript;
+                          if (billInputData.billerName && !transcript.toLowerCase().includes(billInputData.billerName.toLowerCase())) {
+                            newCommand += ` for ${billInputData.billerName}`;
+                          }
+                          if (billInputData.consumerNumber && !transcript.includes(billInputData.consumerNumber)) {
+                            newCommand += ` number ${billInputData.consumerNumber}`;
+                          }
+                          if (billInputData.amount && !transcript.includes(billInputData.amount)) {
+                            newCommand += ` with ${billInputData.amount} rupees`;
+                          }
+                          
+                          setTranscript(newCommand);
+                          handleVoiceCommand(newCommand);
+                          // Don't reset billInputData yet, it will be updated by the response
+                        }}
+                        className="w-full py-3 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 shadow-lg shadow-blue-100 transition-all active:scale-[0.98]"
+                      >
+                        Proceed to Preview
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1041,7 +1217,7 @@ export default function Home() {
         {preview && (
           <div className="bg-white rounded-2xl shadow-xl p-8 mb-6">
             <h2 className="text-2xl font-bold text-gray-900 mb-4">
-              Payment Preview
+              {preview.isBill ? "Bill Payment Preview" : "Payment Preview"}
             </h2>
             {!preview.rulesResult.allowed ? (
               <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
@@ -1057,7 +1233,7 @@ export default function Home() {
                 {!needsPinVerification && (
                   <div className="space-y-3 mb-6">
                     <div className="flex justify-between">
-                      <span>To:</span>
+                      <span>{preview.isBill ? "Biller:" : "To:"}</span>
                       <span className="font-medium">
                         {preview.beneficiaryName}
                       </span>
@@ -1084,6 +1260,18 @@ export default function Home() {
                         {preview.accountNumber}
                       </span>
                     </div>
+                    {preview.isBill && !preview.isAlreadySaved && (
+                      <div className="mt-4 pt-4 border-t border-gray-100">
+                        <button 
+                          onClick={handleSaveBiller}
+                          disabled={isSavingBiller}
+                          className="flex items-center space-x-2 text-xs font-bold text-blue-600 hover:text-blue-700 bg-blue-50 px-3 py-2 rounded-lg transition-colors"
+                        >
+                          <Settings className="w-3 h-3" />
+                          <span>{isSavingBiller ? "Saving..." : "Save for future recharges"}</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
 

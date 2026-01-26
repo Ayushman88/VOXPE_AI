@@ -11,9 +11,7 @@ import {
   explainAIDecision,
 } from "@/lib/security";
 
-const genAI = new GoogleGenerativeAI(
-  process.env.GEMINI_API_KEY || "REMOVED_EXPOSED_KEY"
-);
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-in-production";
@@ -45,42 +43,48 @@ function getUserIdFromRequest(request: NextRequest): string | null {
 }
 
 interface ParsedIntent {
-  intent: "MAKE_PAYMENT" | "CHECK_BALANCE" | "SHOW_TRANSACTIONS" | "UNKNOWN";
+  intent: "MAKE_PAYMENT" | "CHECK_BALANCE" | "SHOW_TRANSACTIONS" | "PAY_BILL" | "UNKNOWN";
   amount?: number;
   currency?: string;
   payee_name?: string;
   payment_method?: "UPI" | "IMPS" | "NEFT";
+  bill_type?: string;
+  consumer_number?: string;
+  biller_name?: string;
   schedule?: "NOW" | string;
 }
 
 async function parseIntent(command: string): Promise<ParsedIntent> {
   const systemPrompt = `You are a banking AI assistant. Parse the user's command and return ONLY valid JSON with this EXACT structure:
 {
-  "intent": "MAKE_PAYMENT" | "CHECK_BALANCE" | "SHOW_TRANSACTIONS" | "UNKNOWN",
-  "amount": number (if payment, REQUIRED for MAKE_PAYMENT),
+  "intent": "MAKE_PAYMENT" | "CHECK_BALANCE" | "SHOW_TRANSACTIONS" | "PAY_BILL" | "UNKNOWN",
+  "amount": number (if payment/bill, REQUIRED),
   "currency": "INR" (default, always include),
-  "payee_name": string (if payment, REQUIRED for MAKE_PAYMENT),
-  "payment_method": "UPI" | "IMPS" | "NEFT" (if payment, default "UPI"),
+  "payee_name": string (if MAKE_PAYMENT, REQUIRED),
+  "bill_type": "ELECTRICITY" | "WATER" | "GAS" | "BROADBAND" | "MOBILE_POSTPAID" | "MOBILE_RECHARGE" | "DTH" (if PAY_BILL, REQUIRED),
+  "consumer_number": string (if PAY_BILL, REQUIRED),
+  "biller_name": string (if PAY_BILL, REQUIRED),
+  "payment_method": "UPI" | "IMPS" | "NEFT" (if MAKE_PAYMENT, default "UPI"),
   "schedule": "NOW" (default, always include)
 }
 
 CRITICAL PARSING RULES:
-1. If command contains "pay", "send", "transfer", "give", "money" → intent MUST be "MAKE_PAYMENT"
-2. If command contains "balance", "how much", "account" → intent MUST be "CHECK_BALANCE"
-3. If command contains "transaction", "history", "payment", "statement" → intent MUST be "SHOW_TRANSACTIONS"
-4. Extract amount: Look for numbers like "300", "Rs 300", "₹300", "300 rupees" → amount: 300
-5. Extract payee: Look for names after "to" or "for" → payee_name: "Rohan"
-6. Extract method: "upi", "UPI", "via upi", "imps", "neft" → payment_method: "UPI" or "IMPS" or "NEFT"
+1. If command contains "pay bill", "electricity", "water", "gas", "recharge" → intent MUST be "PAY_BILL"
+2. If command contains "pay", "send", "transfer", "give", "money" AND NOT "bill" → intent MUST be "MAKE_PAYMENT"
+3. If command contains "balance", "how much", "account" → intent MUST be "CHECK_BALANCE"
+4. If command contains "transaction", "history", "payment", "statement" → intent MUST be "SHOW_TRANSACTIONS"
+5. Extract amount: Look for numbers like "300", "Rs 300", "₹300", "300 rupees"
+6. For PAY_BILL:
+   - Identify bill_type (ELECTRICITY, WATER, GAS, BROADBAND, MOBILE_POSTPAID, MOBILE_RECHARGE, DTH)
+   - Identify consumer_number (usually a string of digits or alphanum)
+   - Identify biller_name (e.g., "Tata Power", "BSNL", "Airtel")
+7. For MAKE_PAYMENT:
+   - Identify payee_name (name after "to")
 
-EXAMPLES (copy this format exactly):
+EXAMPLES:
+- "Pay electricity bill of Rs 1200 for consumer 987654321 at Tata Power" → {"intent":"PAY_BILL","amount":1200,"currency":"INR","bill_type":"ELECTRICITY","consumer_number":"987654321","biller_name":"Tata Power","schedule":"NOW"}
+- "Recharge my Airtel mobile with 499, number 9888888888" → {"intent":"PAY_BILL","amount":499,"currency":"INR","bill_type":"MOBILE_RECHARGE","consumer_number":"9888888888","biller_name":"Airtel","schedule":"NOW"}
 - "Pay 500 rupees to Rohan via UPI" → {"intent":"MAKE_PAYMENT","amount":500,"currency":"INR","payee_name":"Rohan","payment_method":"UPI","schedule":"NOW"}
-- "pay Rs 500 to Rohan via upi" → {"intent":"MAKE_PAYMENT","amount":500,"currency":"INR","payee_name":"Rohan","payment_method":"UPI","schedule":"NOW"}
-- "pay Rs 300 to Rohan via upi" → {"intent":"MAKE_PAYMENT","amount":300,"currency":"INR","payee_name":"Rohan","payment_method":"UPI","schedule":"NOW"}
-- "send 500 to Rohan" → {"intent":"MAKE_PAYMENT","amount":500,"currency":"INR","payee_name":"Rohan","payment_method":"UPI","schedule":"NOW"}
-- "What's my balance?" → {"intent":"CHECK_BALANCE","currency":"INR","schedule":"NOW"}
-- "check balance" → {"intent":"CHECK_BALANCE","currency":"INR","schedule":"NOW"}
-- "Show my last 5 payments" → {"intent":"SHOW_TRANSACTIONS","currency":"INR","schedule":"NOW"}
-- "show transactions" → {"intent":"SHOW_TRANSACTIONS","currency":"INR","schedule":"NOW"}
 
 IMPORTANT: Always return valid JSON. If you cannot determine intent, return {"intent":"UNKNOWN","currency":"INR","schedule":"NOW"}`;
 
@@ -143,6 +147,70 @@ function parseIntentFallback(command: string): ParsedIntent {
   console.log("🔄 Using fallback parser (OpenAI unavailable) for command:", command);
   const lowerCommand = command.toLowerCase().trim();
   
+  // BILL PAYMENT / RECHARGE FALLBACK
+  if (lowerCommand.includes("bill") || lowerCommand.includes("recharge") || 
+      lowerCommand.includes("electricity") || lowerCommand.includes("water") || 
+      lowerCommand.includes("gas") || lowerCommand.includes("dth") || 
+      lowerCommand.includes("broadband") || lowerCommand.includes("mobile")) {
+    
+    console.log("Fallback: Bill payment/recharge intent");
+    
+    // Extract amount - improved regex
+    const amountMatch = command.match(/(?:rs\.?|rupees?|₹|rupee)\s*(\d+(?:\.\d+)?)/i) || 
+                        command.match(/\b(\d+(?:\.\d+)?)\s*(?:rs\.?|rupees?|₹|rupee)\b/i) ||
+                        command.match(/\bwith\s+(\d+(?:\.\d+)?)\b/i);
+    const amount = amountMatch ? parseFloat(amountMatch[1]) : undefined;
+    
+    // Extract consumer number / phone number
+    // Improved regex to handle various formats and avoid greedy matching of small numbers
+    const consumerMatch = command.match(/\b(\d{10,12})\b/) || 
+                          command.match(/\b(\d{5}\s\d{5})\b/) ||
+                          command.match(/\b(\d{3}\s\d{3}\s\d{4})\b/);
+    let consumerNumber = consumerMatch ? consumerMatch[1].replace(/[-\s]/g, "") : undefined;
+    
+    // Identify bill type
+    let billType = "MOBILE_RECHARGE";
+    if (lowerCommand.includes("electricity")) billType = "ELECTRICITY";
+    else if (lowerCommand.includes("water")) billType = "WATER";
+    else if (lowerCommand.includes("gas")) billType = "GAS";
+    else if (lowerCommand.includes("broadband")) billType = "BROADBAND";
+    else if (lowerCommand.includes("dth")) billType = "DTH";
+    else if (lowerCommand.includes("postpaid")) billType = "MOBILE_POSTPAID";
+    
+    // Identify biller
+    let billerName = undefined;
+    const billerKeywords = {
+      "Airtel": ["airtel"],
+      "Jio": ["jio", "reliance jio"],
+      "Vi": ["vi", "vodafone", "idea"],
+      "BSNL": ["bsnl"],
+      "Tata Power": ["tata power", "tata"],
+      "Adani Power": ["adani power", "adani"],
+    };
+
+    for (const [name, keywords] of Object.entries(billerKeywords)) {
+      if (keywords.some(k => lowerCommand.includes(k))) {
+        billerName = name;
+        break;
+      }
+    }
+
+    if (!billerName && !lowerCommand.includes("recharge")) {
+      billerName = "Default Biller"; 
+    }
+
+    return {
+      intent: "PAY_BILL",
+      amount,
+      bill_type: billType,
+      consumer_number: consumerNumber,
+      biller_name: billerName,
+      currency: "INR",
+      schedule: "NOW",
+    };
+  }
+
+  // MAKE PAYMENT FALLBACK
   if (lowerCommand.includes("pay") || lowerCommand.includes("send") || 
       lowerCommand.includes("transfer") || lowerCommand.includes("give") ||
       lowerCommand.includes("money")) {
@@ -248,31 +316,33 @@ export async function POST(request: NextRequest) {
 
     userId = getUserIdFromRequest(request);
     
+    // ... rest of user identification logic ...
     if (!userId) {
-      console.log("⚠️ [Process Command] No userId from token, will use banking API token for user identification");
       const authHeader = request.headers.get("authorization");
       if (authHeader?.startsWith("Bearer ")) {
         const token = authHeader.substring(7);
         try {
           const decoded = jwt.decode(token) as { userId?: string };
-          if (decoded?.userId) {
-            console.log("✅ [Process Command] Extracted userId from token payload:", decoded.userId);
-            effectiveUserId = decoded.userId;
-          } else {
-            console.log("⚠️ [Process Command] No userId in token payload, using fallback");
-            effectiveUserId = "demo-user-id";
-          }
+          effectiveUserId = decoded?.userId || "demo-user-id";
         } catch {
-          console.log("⚠️ [Process Command] Could not decode token, using fallback");
           effectiveUserId = "demo-user-id";
         }
       } else {
-        console.log("⚠️ [Process Command] No auth header, using fallback");
         effectiveUserId = "demo-user-id";
       }
     } else {
       effectiveUserId = userId;
     }
+
+    // CREATE AUDIT LOG ENTRY EARLY to prevent "traceId not found" issues
+    await db.aiAuditLog.create({
+      data: {
+        userId: effectiveUserId!,
+        rawCommandText: command,
+        parsedIntentJson: JSON.stringify({ intent: "UNKNOWN" }),
+        traceId,
+      }
+    });
     
     console.log("👤 [Process Command] Using effectiveUserId:", effectiveUserId);
 
@@ -495,6 +565,151 @@ export async function POST(request: NextRequest) {
         traceId,
       });
 
+    } else if (parsedIntent.intent === "PAY_BILL") {
+      // 1. Check for saved biller if name is missing but number is present
+      if (!parsedIntent.biller_name && parsedIntent.consumer_number) {
+        const saved = await db.savedBiller.findFirst({
+          where: { 
+            bankingUserId: effectiveUserId!, 
+            consumerNumber: parsedIntent.consumer_number 
+          }
+        });
+        if (saved) {
+          parsedIntent.biller_name = saved.billerName;
+          parsedIntent.bill_type = saved.billType;
+        }
+      }
+
+      // 2. Check for saved biller if name is present but number is missing
+      if (parsedIntent.biller_name && !parsedIntent.consumer_number) {
+        const saved = await db.savedBiller.findFirst({
+          where: { 
+            bankingUserId: effectiveUserId!, 
+            billerName: { contains: parsedIntent.biller_name, mode: 'insensitive' }
+          }
+        });
+        if (saved) {
+          parsedIntent.consumer_number = saved.consumerNumber;
+          parsedIntent.bill_type = saved.billType;
+        }
+      }
+
+      // If bill_type is missing, default to MOBILE_RECHARGE if it looks like a recharge
+      if (!parsedIntent.bill_type) {
+        if (command.toLowerCase().includes("recharge") || command.toLowerCase().includes("mobile")) {
+          parsedIntent.bill_type = "MOBILE_RECHARGE";
+        } else {
+          parsedIntent.bill_type = "ELECTRICITY"; // Safe default for bills
+        }
+      }
+
+      // If we're missing details, ask for them specifically
+      if (!parsedIntent.amount || !parsedIntent.consumer_number || !parsedIntent.biller_name) {
+        let missing = [];
+        if (!parsedIntent.consumer_number) missing.push("phone/consumer number");
+        if (!parsedIntent.amount) missing.push("amount");
+        if (!parsedIntent.biller_name) missing.push("biller name (like Airtel, Jio, or Tata Power)");
+
+        let prompt = "I can help with that! ";
+        if (parsedIntent.bill_type === "MOBILE_RECHARGE" || parsedIntent.bill_type === "MOBILE_POSTPAID") {
+          prompt += "To recharge your phone, I'll need your " + missing.join(", ") + ".";
+        } else {
+          prompt += "To pay your " + (parsedIntent.bill_type || "bill").toLowerCase().replace('_', ' ') + ", please provide the " + missing.join(", ") + ".";
+        }
+
+        return NextResponse.json({
+          response: prompt + "\n\nYou can say something like: 'Recharge my Airtel phone 9888888888 with 499 rupees'.",
+          preview: null,
+          needsMoreInfo: true,
+          missingFields: missing,
+          intent: "PAY_BILL",
+          billType: parsedIntent.bill_type,
+          extractedInfo: {
+            amount: parsedIntent.amount,
+            consumerNumber: parsedIntent.consumer_number,
+            billerName: parsedIntent.biller_name
+          }
+        });
+      }
+
+      let accounts;
+      try {
+        accounts = await bankingAPI.getAccounts();
+      } catch (error: any) {
+        console.error("❌ [Process Command] Failed to fetch accounts:", error);
+        return NextResponse.json({
+          response: `Unable to access your accounts: ${error.message}.`,
+          preview: null,
+        });
+      }
+      
+      if (!accounts || accounts.length === 0) {
+        return NextResponse.json({
+          response: "No active account found. Please register at the banking app first.",
+          preview: null,
+        });
+      }
+
+      const account = accounts[0];
+
+      try {
+        const previewData = await bankingAPI.createBillPreview({
+          fromAccountId: account.id,
+          billType: parsedIntent.bill_type,
+          billerName: parsedIntent.biller_name,
+          consumerNumber: parsedIntent.consumer_number,
+          amount: parsedIntent.amount,
+        });
+
+        // Store the intent in audit log for confirmation phase
+        await db.aiAuditLog.updateMany({
+          where: { traceId },
+          data: { 
+            previewId: previewData.previewId,
+            parsedIntentJson: JSON.stringify(parsedIntent),
+          },
+        });
+
+        const explanation = explainAIDecision(parsedIntent.intent, parsedIntent, previewData.rulesResult);
+
+        // Check if this biller is already saved
+        const isAlreadySaved = await db.savedBiller.findFirst({
+          where: {
+            bankingUserId: effectiveUserId!,
+            consumerNumber: parsedIntent.consumer_number,
+            billerName: parsedIntent.biller_name,
+          }
+        });
+
+        return NextResponse.json({
+          response: explanation + `You're about to pay ₹${previewData.requestedAmount} for your ${parsedIntent.bill_type.toLowerCase().replace('_', ' ')} bill (${parsedIntent.biller_name}) with consumer number ${parsedIntent.consumer_number}. Please confirm to proceed.`,
+          voiceMatched: isVoiceMatched,
+          voiceExpired,
+          preview: {
+            previewId: previewData.previewId,
+            requestedAmount: previewData.requestedAmount,
+            charges: previewData.charges,
+            finalDebitAmount: previewData.finalDebitAmount,
+            rulesResult: previewData.rulesResult,
+            beneficiaryName: `${parsedIntent.bill_type} - ${parsedIntent.biller_name}`,
+            method: "BILL_PAY",
+            accountNumber: account.accountNumber,
+            isBill: true,
+            billType: parsedIntent.bill_type,
+            billerName: parsedIntent.biller_name,
+            consumerNumber: parsedIntent.consumer_number,
+            isAlreadySaved: !!isAlreadySaved,
+          },
+          traceId,
+        });
+      } catch (previewError: any) {
+        console.error("❌ [Process Command] Bill preview failed:", previewError);
+        return NextResponse.json({
+          response: `Sorry, I couldn't create a bill preview: ${previewError.message}`,
+          preview: null,
+        });
+      }
+
     } else if (parsedIntent.intent === "CHECK_BALANCE") {
       let accounts;
       try {
@@ -561,15 +776,20 @@ export async function POST(request: NextRequest) {
   } catch (error: any) {
     console.error("Error processing command:", error);
     
-    if (effectiveUserId) {
-      await logAIAction(
-        effectiveUserId,
-        "ERROR",
-        "command processing",
-        { error: error.message },
-        { traceId },
-        traceId
-      );
+    // SAFE LOGGING: Try to log but don't crash if logging itself fails
+    try {
+      if (effectiveUserId) {
+        await logAIAction(
+          effectiveUserId,
+          "ERROR",
+          "command processing",
+          { error: error.message },
+          { traceId },
+          traceId
+        );
+      }
+    } catch (logError) {
+      console.error("Failed to log error action:", logError);
     }
 
     return NextResponse.json(

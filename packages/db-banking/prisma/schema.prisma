@@ -23,7 +23,9 @@ model User {
   accounts            Account[]
   beneficiaries       Beneficiary[]
   paymentPreviews     PaymentPreview[]
+  billPreviews        BillPreview[]
   transactions        Transaction[]
+  billPayments        BillPayment[]
   oauthAuthorizations OAuthAuthorization[]
 
   @@map("users")
@@ -60,7 +62,9 @@ model Account {
 
   user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   paymentPreviews PaymentPreview[]
+  billPreviews    BillPreview[]
   transactions    Transaction[]
+  billPayments    BillPayment[]
 
   @@map("accounts")
 }
@@ -169,4 +173,66 @@ enum InitiatedBy {
 enum TransactionChannel {
   WEB
   VOICE_AGENT
+}
+
+model BillPreview {
+  id               String               @id @default(cuid())
+  userId           String               @map("user_id")
+  fromAccountId    String               @map("from_account_id")
+  billType         BillType             @map("bill_type")
+  billerName       String               @map("biller_name")
+  consumerNumber   String               @map("consumer_number")
+  amount           Decimal              @db.Decimal(15, 2)
+  charges          Decimal              @default(0) @db.Decimal(15, 2)
+  finalDebitAmount Decimal              @map("final_debit_amount") @db.Decimal(15, 2)
+  status           BillPreviewStatus    @default(PENDING)
+  consentToken     String?              @unique @map("consent_token")
+  expiresAt        DateTime             @map("expires_at")
+  createdAt        DateTime             @default(now()) @map("created_at")
+  updatedAt        DateTime             @updatedAt @map("updated_at")
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fromAccount  Account      @relation(fields: [fromAccountId], references: [id])
+  billPayments BillPayment[]
+
+  @@map("bill_previews")
+}
+
+model BillPayment {
+  id              String            @id @default(cuid())
+  userId          String            @map("user_id")
+  fromAccountId   String            @map("from_account_id")
+  billPreviewId   String?           @map("bill_preview_id")
+  billType        BillType          @map("bill_type")
+  billerName      String            @map("biller_name")
+  consumerNumber  String            @map("consumer_number")
+  amount          Decimal           @db.Decimal(15, 2)
+  status          TransactionStatus
+  bankReferenceId String?           @unique @map("bank_reference_id")
+  initiatedBy     InitiatedBy       @map("initiated_by")
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fromAccount Account      @relation(fields: [fromAccountId], references: [id])
+  billPreview BillPreview? @relation(fields: [billPreviewId], references: [id])
+
+  @@map("bill_payments")
+}
+
+enum BillType {
+  ELECTRICITY
+  WATER
+  GAS
+  BROADBAND
+  MOBILE_POSTPAID
+  MOBILE_RECHARGE
+  DTH
+}
+
+enum BillPreviewStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  EXPIRED
 }

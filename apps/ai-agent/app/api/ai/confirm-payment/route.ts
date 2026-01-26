@@ -97,9 +97,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!parsedIntent.payee_name || !parsedIntent.amount) {
+    if (parsedIntent.intent === "MAKE_PAYMENT" && (!parsedIntent.payee_name || !parsedIntent.amount)) {
       return NextResponse.json(
         { error: "Missing payment details in preview" },
+        { status: 400 }
+      );
+    }
+
+    if (parsedIntent.intent === "PAY_BILL" && (!parsedIntent.bill_type || !parsedIntent.amount)) {
+      return NextResponse.json(
+        { error: "Missing bill details in preview" },
         { status: 400 }
       );
     }
@@ -134,6 +141,49 @@ export async function POST(request: NextRequest) {
       { previewId, consentToken },
       { traceId }
     );
+
+    // If it's a bill payment, we use direct API as browser automation for bills is not yet implemented in worker
+    if (parsedIntent.intent === "PAY_BILL") {
+      try {
+        console.log(`🔐 [Confirm Payment] Executing bill payment via API: ${previewId}`);
+        const executeData = await bankingAPI.executeBillFromPreview({
+          previewId,
+          consentToken,
+        });
+
+        if (auditLog) {
+          await db.aiAuditLog.update({
+            where: { id: auditLog.id },
+            data: {
+              result: JSON.stringify({
+                success: true,
+                transactionId: executeData.transactionId,
+                bankReferenceId: executeData.bankReferenceId,
+                method: "DIRECT_API_BILL",
+              }),
+            },
+          });
+        }
+
+        await logAIAction(
+          userId,
+          "BILL_PAYMENT_EXECUTED",
+          `Bill payment executed for preview ${previewId}`,
+          { success: true, ...executeData },
+          { traceId }
+        );
+
+        return NextResponse.json({
+          success: true,
+          bankReferenceId: executeData.bankReferenceId,
+          transactionId: executeData.transactionId,
+          traceId,
+        });
+      } catch (billError: any) {
+        console.error("❌ [Confirm Payment] Bill payment failed:", billError);
+        throw new Error(`Bill payment execution failed: ${billError.message}`);
+      }
+    }
 
     try {
       console.log(

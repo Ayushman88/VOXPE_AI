@@ -60,3 +60,17 @@ model VoiceProfile {
 
   @@map("voice_profiles")
 }
+
+model SavedBiller {
+  id             String   @id @default(cuid())
+  bankingUserId  String   @map("banking_user_id")
+  billType       String   @map("bill_type")
+  billerName     String   @map("biller_name")
+  consumerNumber String   @map("consumer_number")
+  nickname       String?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@unique([bankingUserId, consumerNumber, billerName])
+  @@map("saved_billers")
+}
